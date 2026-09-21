@@ -20,14 +20,14 @@ const owner = "AwesomeGCP.com"
 var errSkip = errors.New("skip")
 
 type Config struct {
-	replace   bool
-	recursive bool
-	ext       string
-	parallel  int
-	threshold float64
-	minQ      int
-	maxQ      int
-	step      int
+	replace    bool
+	recursive  bool
+	noParallel bool
+	ext        string
+	threshold  float64
+	minQ       int
+	maxQ       int
+	step       int
 }
 
 type Result struct {
@@ -112,8 +112,8 @@ func main() {
 	flag.BoolVar(&cfg.replace, "replace", false, "replace input files in place")
 	flag.BoolVar(&cfg.recursive, "recursive", false, "recursively search for image files in directories")
 	flag.BoolVar(&cfg.recursive, "r", false, "recursively search for image files in directories (shorthand)")
+	flag.BoolVar(&cfg.noParallel, "noparallel", false, "disable parallel processing (run sequentially)")
 	flag.StringVar(&cfg.ext, "ext", "", "output extension, e.g. jpg, webp, png; defaults to source extension")
-	flag.IntVar(&cfg.parallel, "parallel", runtime.NumCPU(), "number of images to process concurrently")
 	flag.Float64Var(&cfg.threshold, "quality", 0.98, "minimum SSIM for lossy conversions, from 0 to 1")
 	flag.IntVar(&cfg.minQ, "min-quality", 60, "minimum encoder quality considered")
 	flag.IntVar(&cfg.maxQ, "max-quality", 95, "maximum encoder quality considered")
@@ -132,7 +132,7 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	if cfg.parallel < 1 || cfg.threshold <= 0 || cfg.threshold > 1 || cfg.minQ < 1 || cfg.maxQ > 100 || cfg.minQ > cfg.maxQ || cfg.step < 1 {
+	if cfg.threshold <= 0 || cfg.threshold > 1 || cfg.minQ < 1 || cfg.maxQ > 100 || cfg.minQ > cfg.maxQ || cfg.step < 1 {
 		fmt.Fprintln(os.Stderr, "invalid options")
 		os.Exit(2)
 	}
@@ -185,10 +185,15 @@ func main() {
 
 	updateProgress()
 
+	workers := runtime.NumCPU()
+	if cfg.noParallel {
+		workers = 1
+	}
+
 	jobs := make(chan string)
 	results := make(chan Result)
 	var wg sync.WaitGroup
-	for i := 0; i < cfg.parallel; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -269,9 +274,9 @@ Usage:
 
 Options:
   -recursive, -r       search for image files recursively in directories
+  -noparallel          disable parallel processing (default: parallel using CPU count)
   -replace             replace each input file in place
   -ext string          output extension (jpg, webp, png, jpeg); default: source extension
-  -parallel int        concurrent jobs (default: CPU count)
   -quality float       minimum SSIM for lossy output (default: 0.98)
   -min-quality int     minimum encoder quality (default: 60)
   -max-quality int     maximum encoder quality (default: 95)
@@ -280,6 +285,7 @@ Options:
 Examples:
   tinyimg *.png
   tinyimg -recursive ./photos
+  tinyimg -noparallel *.jpg
   tinyimg -ext jpg *.png
   tinyimg -replace *.jpg
   tinyimg -ext webp -quality 0.985 *.png

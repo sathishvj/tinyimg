@@ -20,15 +20,15 @@ go build -o tinyimg .
 ./tinyimg -ext jpg *.png
 ./tinyimg -ext webp -quality 0.985 *.png
 ./tinyimg -replace *.jpg
-./tinyimg -parallel 8 *.jpg *.png
+./tinyimg -noparallel *.jpg *.png
 ```
 
 ### Options
 
 - `-recursive`, `-r`: search for image files recursively under given folders.
+- `-noparallel`: disable parallel processing (run sequentially). By default, images are processed in parallel using the number of CPUs.
 - `-replace`: replace each source file in place. Cannot be combined with `-ext`.
 - `-ext`: output format/extension: `png`, `jpg`, or `webp`. If omitted, source extension is retained.
-- `-parallel`: number of simultaneous image jobs. Default is CPU count.
 - `-quality`: minimum SSIM for lossy conversion. Default `0.98`.
 - `-min-quality`: minimum encoder quality tested. Default `60`.
 - `-max-quality`: maximum encoder quality tested. Default `95`.
