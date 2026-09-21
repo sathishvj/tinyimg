@@ -21,6 +21,7 @@ var errSkip = errors.New("skip")
 
 type Config struct {
 	replace   bool
+	recursive bool
 	ext       string
 	parallel  int
 	threshold float64
@@ -39,9 +40,55 @@ type Result struct {
 	duration      time.Duration
 }
 
+var imageExtensions = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+	".webp": true,
+}
+
+func isImageFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return imageExtensions[ext]
+}
+
+func collectInputs(args []string, recursive bool) ([]string, error) {
+	var inputs []string
+	for _, arg := range args {
+		st, err := os.Stat(arg)
+		if err != nil {
+			inputs = append(inputs, arg)
+			continue
+		}
+		if st.IsDir() {
+			if !recursive {
+				inputs = append(inputs, arg)
+				continue
+			}
+			err := filepath.WalkDir(arg, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !d.IsDir() && isImageFile(path) {
+					inputs = append(inputs, path)
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to scan directory %s: %w", arg, err)
+			}
+		} else {
+			inputs = append(inputs, arg)
+		}
+	}
+	return inputs, nil
+}
+
 func main() {
 	var cfg Config
 	flag.BoolVar(&cfg.replace, "replace", false, "replace input files in place")
+	flag.BoolVar(&cfg.recursive, "recursive", false, "recursively search for image files in directories")
+	flag.BoolVar(&cfg.recursive, "r", false, "recursively search for image files in directories (shorthand)")
 	flag.StringVar(&cfg.ext, "ext", "", "output extension, e.g. jpg, webp, png; defaults to source extension")
 	flag.IntVar(&cfg.parallel, "parallel", runtime.NumCPU(), "number of images to process concurrently")
 	flag.Float64Var(&cfg.threshold, "quality", 0.98, "minimum SSIM for lossy conversions, from 0 to 1")
@@ -64,7 +111,32 @@ func main() {
 		os.Exit(2)
 	}
 
+	inputs, err := collectInputs(flag.Args(), cfg.recursive)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(inputs) == 0 {
+		fmt.Println("No matching image files found.")
+		return
+	}
+
 	checkDependencies(cfg)
+
+	total := len(inputs)
+	var (
+		mu         sync.Mutex
+		inProgress int
+		completed  int
+	)
+
+	updateProgress := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		fmt.Fprintf(os.Stderr, "\rProgress: %d found | %d in progress | %d/%d completed", total, inProgress, completed, total)
+	}
+
+	updateProgress()
 
 	jobs := make(chan string)
 	results := make(chan Result)
@@ -74,12 +146,25 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for input := range jobs {
-				results <- process(input, cfg)
+				mu.Lock()
+				inProgress++
+				mu.Unlock()
+				updateProgress()
+
+				res := process(input, cfg)
+
+				mu.Lock()
+				inProgress--
+				completed++
+				mu.Unlock()
+				updateProgress()
+
+				results <- res
 			}
 		}()
 	}
 	go func() {
-		for _, input := range flag.Args() {
+		for _, input := range inputs {
 			jobs <- input
 		}
 		close(jobs)
@@ -91,6 +176,9 @@ func main() {
 	for r := range results {
 		all = append(all, r)
 	}
+
+	// Clear the progress indicator line before printing final summary table
+	fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 80))
 
 	var totalBefore, totalAfter int64
 	fmt.Println()
@@ -126,7 +214,34 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `tinyimg - local image optimizer\n\nUsage:\n  tinyimg [options] image1 image2 ...\n\nOptions:\n  -replace             replace each input file in place\n  -ext string         output extension (jpg, webp, png, jpeg); default: source extension\n  -parallel int       concurrent jobs (default: CPU count)\n  -quality float      minimum SSIM for lossy output (default: 0.98)\n  -min-quality int    minimum encoder quality (default: 60)\n  -max-quality int    maximum encoder quality (default: 95)\n  -quality-step int   quality search step (default: 5)\n\nExamples:\n  tinyimg *.png\n  tinyimg -ext jpg *.png\n  tinyimg -replace *.jpg\n  tinyimg -ext webp -quality 0.985 *.png\n\nNotes:\n  * Metadata is stripped and Owner is set to %s.\n  * Lossy conversions use ImageMagick SSIM to find the smallest acceptable output.\n  * PNG optimization is lossless.\n`, owner)
+	fmt.Fprintf(os.Stderr, `tinyimg - local image optimizer
+
+Usage:
+  tinyimg [options] image1 image2 ...
+  tinyimg [options] -recursive dir1 dir2 ...
+
+Options:
+  -recursive, -r       search for image files recursively in directories
+  -replace             replace each input file in place
+  -ext string          output extension (jpg, webp, png, jpeg); default: source extension
+  -parallel int        concurrent jobs (default: CPU count)
+  -quality float       minimum SSIM for lossy output (default: 0.98)
+  -min-quality int     minimum encoder quality (default: 60)
+  -max-quality int     maximum encoder quality (default: 95)
+  -quality-step int    quality search step (default: 5)
+
+Examples:
+  tinyimg *.png
+  tinyimg -recursive ./photos
+  tinyimg -ext jpg *.png
+  tinyimg -replace *.jpg
+  tinyimg -ext webp -quality 0.985 *.png
+
+Notes:
+  * Metadata is stripped and Owner is set to %s.
+  * Lossy conversions use ImageMagick SSIM to find the smallest acceptable output.
+  * PNG optimization is lossless.
+`, owner)
 }
 
 func checkDependencies(cfg Config) {
@@ -391,7 +506,3 @@ func human(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %s", v, units[i])
 }
-
-type boolMap map[string]bool
-
-func (m boolMap) has(k string) bool { return m[k] }

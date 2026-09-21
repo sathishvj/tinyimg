@@ -15,6 +15,8 @@ go build -o tinyimg .
 
 ```bash
 ./tinyimg *.png
+./tinyimg -recursive ./photos
+./tinyimg -r -ext webp ./photos
 ./tinyimg -ext jpg *.png
 ./tinyimg -ext webp -quality 0.985 *.png
 ./tinyimg -replace *.jpg
@@ -23,6 +25,7 @@ go build -o tinyimg .
 
 ### Options
 
+- `-recursive`, `-r`: search for image files recursively under given folders.
 - `-replace`: replace each source file in place. Cannot be combined with `-ext`.
 - `-ext`: output format/extension: `png`, `jpg`, or `webp`. If omitted, source extension is retained.
 - `-parallel`: number of simultaneous image jobs. Default is CPU count.
