@@ -84,4 +84,29 @@ func TestCollectInputs(t *testing.T) {
 			t.Errorf("got %v, want [%s %s]", inputs, file1, file2)
 		}
 	})
+
+	t.Run("unrecognized flag argument", func(t *testing.T) {
+		_, err := collectInputs([]string{file1, "-invalid-param"}, true)
+		if err == nil {
+			t.Fatalf("expected error for unrecognized flag, got nil")
+		}
+	})
+}
+
+func TestCleanupTempFolders(t *testing.T) {
+	tmpDir := t.TempDir()
+	tempFolder := filepath.Join(tmpDir, ".tinyimg-test123")
+	if err := os.Mkdir(tempFolder, 0o755); err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	dummyFile := filepath.Join(tempFolder, "temp.jpg")
+	if err := os.WriteFile(dummyFile, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("failed to create dummy file: %v", err)
+	}
+
+	cleanupTempFolders([]string{tmpDir})
+
+	if _, err := os.Stat(tempFolder); !os.IsNotExist(err) {
+		t.Errorf("expected tempFolder %s to be deleted, but it still exists", tempFolder)
+	}
 }

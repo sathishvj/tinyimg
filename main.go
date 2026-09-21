@@ -55,6 +55,9 @@ func isImageFile(path string) bool {
 func collectInputs(args []string, recursive bool) ([]string, error) {
 	var inputs []string
 	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			return nil, fmt.Errorf("unrecognized option or flag: %s", arg)
+		}
 		st, err := os.Stat(arg)
 		if err != nil {
 			inputs = append(inputs, arg)
@@ -69,6 +72,12 @@ func collectInputs(args []string, recursive bool) ([]string, error) {
 				if err != nil {
 					return err
 				}
+				if strings.HasPrefix(d.Name(), ".tinyimg-") {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
 				if !d.IsDir() && isImageFile(path) {
 					inputs = append(inputs, path)
 				}
@@ -82,6 +91,20 @@ func collectInputs(args []string, recursive bool) ([]string, error) {
 		}
 	}
 	return inputs, nil
+}
+
+func cleanupTempFolders(dirs []string) {
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".tinyimg-") {
+				_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
 }
 
 func main() {
@@ -102,6 +125,13 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	for _, arg := range flag.Args() {
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			fmt.Fprintf(os.Stderr, "unrecognized option or flag: %s\n", arg)
+			usage()
+			os.Exit(2)
+		}
+	}
 	if cfg.parallel < 1 || cfg.threshold <= 0 || cfg.threshold > 1 || cfg.minQ < 1 || cfg.maxQ > 100 || cfg.minQ > cfg.maxQ || cfg.step < 1 {
 		fmt.Fprintln(os.Stderr, "invalid options")
 		os.Exit(2)
@@ -109,6 +139,13 @@ func main() {
 	if cfg.replace && cfg.ext != "" {
 		fmt.Fprintln(os.Stderr, "-replace cannot be combined with -ext because replacement must keep the source path")
 		os.Exit(2)
+	}
+	if cfg.ext != "" {
+		ext := normalizeExt(cfg.ext)
+		if ext != "png" && ext != "jpg" && ext != "jpeg" && ext != "webp" {
+			fmt.Fprintf(os.Stderr, "unsupported output extension: %s (must be png, jpg, jpeg, or webp)\n", cfg.ext)
+			os.Exit(2)
+		}
 	}
 
 	inputs, err := collectInputs(flag.Args(), cfg.recursive)
@@ -120,6 +157,16 @@ func main() {
 		fmt.Println("No matching image files found.")
 		return
 	}
+
+	dirsMap := make(map[string]bool)
+	for _, input := range inputs {
+		dirsMap[filepath.Dir(input)] = true
+	}
+	var dirs []string
+	for d := range dirsMap {
+		dirs = append(dirs, d)
+	}
+	defer cleanupTempFolders(dirs)
 
 	checkDependencies(cfg)
 
@@ -296,15 +343,14 @@ func process(input string, cfg Config) Result {
 	}
 	r.output = output
 
-	tmp, err := os.CreateTemp(filepath.Dir(input), ".tinyimg-*")
+	tmpDir, err := os.MkdirTemp(filepath.Dir(input), ".tinyimg-*")
 	if err != nil {
 		r.err = err
 		return r
 	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	os.Remove(tmpPath)
-	defer os.Remove(tmpPath)
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, "temp."+targetExt)
 
 	var ssim float64
 	var quality int
